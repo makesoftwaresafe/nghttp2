@@ -46,6 +46,7 @@
 #include <algorithm>
 #include <memory>
 #include <chrono>
+#include <fstream>
 #include <unordered_map>
 #include <random>
 #include <ranges>
