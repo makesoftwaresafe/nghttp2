@@ -46,6 +46,7 @@ static const MunitTest tests[] = {
   munit_void_test(test_nghttp2_session_recv_data),
   munit_void_test(test_nghttp2_session_recv_data_no_auto_flow_control),
   munit_void_test(test_nghttp2_session_recv_continuation),
+  munit_void_test(test_nghttp2_session_recv_continuation_too_large),
   munit_void_test(test_nghttp2_session_recv_headers_with_priority),
   munit_void_test(test_nghttp2_session_recv_headers_with_padding),
   munit_void_test(test_nghttp2_session_recv_headers_early_response),
@@ -1619,6 +1620,78 @@ void test_nghttp2_session_recv_continuation(void) {
   assert_int(1, ==, ud.begin_headers_cb_called);
   assert_uint8(NGHTTP2_GOAWAY, ==,
                nghttp2_session_get_next_ob_item(session)->frame.hd.type);
+
+  nghttp2_bufs_free(&bufs);
+  nghttp2_hd_deflate_free(&deflater);
+  nghttp2_session_del(session);
+}
+
+void test_nghttp2_session_recv_continuation_too_large(void) {
+  nghttp2_session *session;
+  static const nghttp2_session_callbacks callbacks = {
+    .on_header_callback = on_header_callback,
+    .on_begin_headers_callback = on_begin_headers_callback,
+    .on_begin_frame_callback = on_begin_frame_callback,
+  };
+  nghttp2_nv *nva;
+  size_t nvlen;
+  nghttp2_frame frame;
+  nghttp2_bufs bufs;
+  nghttp2_buf *buf;
+  nghttp2_ssize rv;
+  my_user_data ud;
+  nghttp2_hd_deflater deflater;
+  uint8_t data[1024];
+  size_t datalen;
+  nghttp2_frame_hd cont_hd;
+  nghttp2_mem *mem;
+
+  mem = nghttp2_mem_default();
+  frame_pack_bufs_init(&bufs);
+
+  nghttp2_session_server_new(&session, &callbacks, &ud);
+
+  nghttp2_hd_deflate_init(&deflater, mem);
+
+  /* Make 1 HEADERS and insert CONTINUATION header */
+  nvlen = ARRLEN(reqnv);
+  nghttp2_nv_array_copy(&nva, reqnv, nvlen, mem);
+  nghttp2_frame_headers_init(&frame.headers, NGHTTP2_FLAG_NONE, 1,
+                             NGHTTP2_HCAT_HEADERS, NULL, nva, nvlen);
+  rv = nghttp2_frame_pack_headers(&bufs, &frame.headers, &deflater);
+
+  assert_ptrdiff(0, ==, rv);
+  assert_size(0, <, nghttp2_bufs_len(&bufs));
+
+  /* make sure that all data is in the first buf */
+  buf = &bufs.head->buf;
+  assert(nghttp2_bufs_len(&bufs) == nghttp2_buf_len(buf));
+
+  nghttp2_frame_headers_free(&frame.headers, mem);
+
+  /* HEADERS's payload is 1 byte */
+  memcpy(data, buf->pos, NGHTTP2_FRAME_HDLEN + 1);
+  datalen = NGHTTP2_FRAME_HDLEN + 1;
+  buf->pos += NGHTTP2_FRAME_HDLEN + 1;
+
+  nghttp2_put_uint32be(data, (uint32_t)((1 << 8) + data[3]));
+
+  /* Set the first CONTINUATION length, 1MiB */
+  nghttp2_frame_hd_init(&cont_hd, 1 << 20, NGHTTP2_CONTINUATION,
+                        NGHTTP2_FLAG_NONE, 1);
+
+  nghttp2_frame_pack_frame_hd(data + datalen, &cont_hd);
+  datalen += NGHTTP2_FRAME_HDLEN;
+
+  ud.header_cb_called = 0;
+  ud.begin_frame_cb_called = 0;
+
+  rv = nghttp2_session_mem_recv2(session, data, datalen);
+  assert_ptrdiff((nghttp2_ssize)datalen, ==, rv);
+  assert_int(1, ==, ud.header_cb_called);
+  assert_int(1, ==, ud.begin_frame_cb_called);
+  assert_enum(nghttp2_inbound_state, NGHTTP2_IB_IGN_ALL, ==,
+              session->iframe.state);
 
   nghttp2_bufs_free(&bufs);
   nghttp2_hd_deflate_free(&deflater);

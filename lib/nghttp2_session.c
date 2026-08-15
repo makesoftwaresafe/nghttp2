@@ -6677,6 +6677,19 @@ static nghttp2_ssize session_mem_recv(nghttp2_session *session,
         return NGHTTP2_ERR_TOO_MANY_CONTINUATIONS;
       }
 
+      if (cont_hd.length > session->local_settings.max_frame_size) {
+        DEBUGF("recv: length is too large %zu > %u\n", cont_hd.length,
+               session->local_settings.max_frame_size);
+        rv = nghttp2_session_terminate_session_with_reason(
+          session, NGHTTP2_FRAME_SIZE_ERROR, "too large frame size");
+
+        if (nghttp2_is_fatal(rv)) {
+          return rv;
+        }
+
+        return (nghttp2_ssize)inlen;
+      }
+
       /* CONTINUATION won't bear NGHTTP2_PADDED flag */
 
       iframe->frame.hd.flags =
