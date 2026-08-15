@@ -85,6 +85,11 @@ void QUICConnectionHandler::handle_packet(const UpstreamAddr *faddr,
     return;
   }
 
+  if ((data[0] & 0x80U) && vc.version == 0) {
+    // Version Negotiation packet was received.
+    return;
+  }
+
   auto config = get_config();
 
   ngtcp2_cid dcid_key;
